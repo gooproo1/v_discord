@@ -41,51 +41,39 @@
 2.  **Get `v_discord_super_easy.py`**:
     Download or copy the `v_discord_super_easy.py` module file (provided in previous responses or from its source) and place it in your project directory, alongside your main bot script.
 
-## 3. Quickstart Example
+## 3. Little Example :3
 
 ```python
-# my_bot.py
-from v_discord_super_easy import * # Import all for simplicity
-import time
+from v_discord import * 
 
-# --- Configuration ---
-BOT_TOKEN = "YOUR_DISCORD_BOT_TOKEN_HERE"  # !!! REPLACE THIS !!!
-SERVER_ID = 123456789012345678      # Optional: Your Server ID
-CHANNEL_ID = 123456789012345679     # Optional: Your default Channel ID
+# CONFIGURATION 👇👇
+BOT_TOKEN = "YOUR_DISCORD_BOT_TOKEN_HERE" 
+SERVER_ID = 123456789012345678     # MANDATORY FOR BOT TO FUNCTION
+CHANNEL_ID = 123456789012345679     # Optional, just your default channel ID
+PREFIX = ">" # Command prefix
 
-# --- Define Command Handlers ---
-@on_command("ping") # Bot will respond to "!ping" (if default prefix)
-def handle_ping(message_obj): # Receives the discord.Message object
-    reply_to_message(message_obj, "Pong!")
-    print(f"Responded to ping from {get_message_author_name(message_obj)}")
-
-@on_command("echo") # Example: !echo Hello there
-def handle_echo(message_obj):
-    content_to_echo = get_message_content(message_obj).split(" ", 1)
-    if len(content_to_echo) > 1:
-        send_message(content_to_echo[1], channel_id=message_obj.channel.id)
-    else:
-        reply_to_message(message_obj, "Usage: !echo <your message>")
+# Commands and the command handlers
+@on_command("hello-world") 
+def handle_ping(message_obj):
+    author = get_message_author_name(message_obj)
+    reply_to_message(message_obj, f"Hello World To You, {author}!")
+    print(f"Responded to ping from {author}")
 
 # --- Main Bot Logic ---
 if __name__ == "__main__":
-    print("Starting bot...")
+    print("Bot Starting..")
 
     # Start the bot. This call blocks until the bot is connected and ready.
     start_bot(
         token=BOT_TOKEN,
-        prefix="!",  # Default command prefix
-        default_server_id=SERVER_ID, # Optional
-        default_channel_id=CHANNEL_ID  # Optional
+        prefix=PREFIX,  
+        default_server_id=SERVER_ID, # Optional but recommended
+        default_channel_id=CHANNEL_ID  # Optional entirely, also recommended to prevent errors upon typos
     )
 
     if is_bot_ready():
         print("Bot is online and ready!")
-        # Send a startup message to the default channel (if configured)
-        send_message("Hello! Super Easy Bot is now online. Prefix is '!'")
-        
-        # Keep the main script alive so the bot (in background threads) can run
-        keep_alive() # This function includes a loop with Ctrl+C handling
+        keep_alive() 
     else:
         print("Bot failed to start.")
     
