@@ -19,7 +19,6 @@
     *   [Information Getters](#information-getters)
     *   [Utility](#utility)
 5.  [Full Example Script](#full-example-script)
-6.  [Important Considerations](#important-considerations)
 
 ## 1. Features
 
