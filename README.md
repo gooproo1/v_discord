@@ -281,7 +281,7 @@ if __name__ == "__main__":
 ```
 
 ## Made With Luv By Justharsiz 🤑
-This module provides a gentle entry point into Discord bot development. Happy botting!
+The module i made actually just speeds up the process on creating discord bots 👍
 ```
 v_discord v1.1.105
 ```
