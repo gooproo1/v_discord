@@ -1,0 +1,453 @@
+## Hey so if you're snooping into my code, you may call it messy and yeah it is lol, its my first time using asyncs (k that was a lie but pretend it isnt)
+
+import discord
+import asyncio
+import threading
+import time
+from typing import Optional, Callable, Dict, List, Union, Tuple
+
+
+_bot_instance_lock = threading.Lock()
+_active_bot_client: Optional[discord.Client] = None
+_active_bot_token: Optional[str] = None
+_event_loop: Optional[asyncio.AbstractEventLoop] = None
+_event_loop_thread: Optional[threading.Thread] = None
+_is_bot_ready_event = threading.Event() 
+
+_command_prefix: str = "!"
+_default_guild_id: Optional[int] = None
+_default_channel_id: Optional[int] = None
+_command_handlers: Dict[str, Callable[[discord.Message], None]] = {} 
+
+def _start_async_event_loop(loop: asyncio.AbstractEventLoop):
+    asyncio.set_event_loop(loop)
+    try:
+        loop.run_forever()
+    except KeyboardInterrupt:
+        print("Async loop received interrupt signal.")
+    finally:
+        if _active_bot_client and _active_bot_client.is_ready():
+            print("Shutting down bot client from async loop...")
+            try:
+                loop.run_until_complete(_active_bot_client.close())
+            except Exception as e:
+                print(f"Error during client close in async loop: {e}")
+        
+        print("Shutting down async tasks...")
+        tasks = asyncio.all_tasks(loop)
+        for task in tasks: task.cancel()
+        loop.run_until_complete(asyncio.gather(*tasks, return_exceptions=True))
+        loop.run_until_complete(loop.shutdown_asyncgens())
+        loop.close()
+        print("Async event loop has been closed.")
+
+def _get_or_create_event_loop() -> asyncio.AbstractEventLoop:
+    global _event_loop, _event_loop_thread
+    if _event_loop is None or _event_loop.is_closed():
+        _event_loop = asyncio.new_event_loop()
+        _event_loop_thread = threading.Thread(
+            target=_start_async_event_loop, args=(_event_loop,), daemon=True
+        )
+        _event_loop_thread.start()
+        time.sleep(0.2) 
+        if not _event_loop.is_running():
+             print("Warning: Event loop did not appear to start correctly.")
+    return _event_loop
+
+def _run_coroutine_threadsafe(coro, timeout=15) -> any: 
+    loop = _get_or_create_event_loop()
+    if not loop.is_running():
+        print("Error: Event loop is not running. Cannot execute coroutine.")
+        return None
+    
+    future = asyncio.run_coroutine_threadsafe(coro, loop)
+    try:
+        return future.result(timeout=timeout)
+    except asyncio.TimeoutError:
+        print(f"Error: Coroutine execution timed out after {timeout}s.")
+    except Exception as e:
+        print(f"Error executing coroutine: {e}")
+    return None
+
+def start_bot(token: str, prefix: str = "!", default_server_id: Optional[int] = None, default_channel_id: Optional[int] = None):
+    global _active_bot_client, _active_bot_token, _command_prefix
+    global _default_guild_id, _default_channel_id, _is_bot_ready_event
+
+    with _bot_instance_lock:
+        if _active_bot_client is not None and _active_bot_client.is_ready():
+            print("Bot is already running.")
+            return
+
+        _active_bot_token = token
+        _command_prefix = prefix
+        _default_guild_id = default_server_id
+        _default_channel_id = default_channel_id
+        _is_bot_ready_event.clear()
+
+        loop = _get_or_create_event_loop()
+
+        intents = discord.Intents.default()
+        intents.message_content = True
+        intents.members = True 
+        intents.guilds = True  
+        
+        _active_bot_client = discord.Client(intents=intents, loop=loop)
+
+        @_active_bot_client.event
+        async def on_ready():
+            global _is_bot_ready_event
+            if _active_bot_client and _active_bot_client.user:
+                print("-" * 30)
+                print(f"Bot '{_active_bot_client.user.name}' is connected!")
+                print(f"User ID: {_active_bot_client.user.id}")
+                print(f"Command Prefix: '{_command_prefix}'")
+                if _default_guild_id: print(f"Default Server ID: {_default_guild_id}")
+                if _default_channel_id: print(f"Default Channel ID: {_default_channel_id}")
+                print("Ready to receive commands.")
+                print("-" * 30)
+                _is_bot_ready_event.set()
+            else:
+                print("Bot connected but user object is not available.")
+                _is_bot_ready_event.set()
+
+        @_active_bot_client.event
+        async def on_message(message: discord.Message):
+            if not _active_bot_client or message.author == _active_bot_client.user:
+                return
+            if not message.content.startswith(_command_prefix):
+                return
+
+            content_without_prefix = message.content[len(_command_prefix):]
+            command_name = content_without_prefix.split(" ", 1)[0].lower() 
+
+            if command_name in _command_handlers:
+                handler = _command_handlers[command_name]
+                try:
+                    await loop.run_in_executor(None, handler, message)
+                except Exception as e:
+                    print(f"Error in command handler for '{command_name}': {e}")
+        
+        print("Connecting to Discord..")
+        try:
+            loop.create_task(_active_bot_client.start(_active_bot_token))
+            ready_success = _is_bot_ready_event.wait(timeout=90.0)
+            if not ready_success:
+                print("Error: Bot did not become ready in time. Check token and network.")
+                stop_bot()
+                return
+            if not (_active_bot_client and _active_bot_client.is_ready()):
+                print("Error: Bot readiness event set, but client not actually ready. Critical issue.")
+                stop_bot()
+                return
+            print("Bot is now live and listening.")
+        except discord.LoginFailure:
+            print("CRITICAL ERROR: Invalid bot token. Please check and try again.")
+            _active_bot_client = None
+        except Exception as e:
+            print(f"An unexpected error occurred during bot startup: {e}")
+            _active_bot_client = None
+
+def stop_bot():
+    global _active_bot_client, _event_loop, _is_bot_ready_event, _event_loop_thread
+    with _bot_instance_lock:
+        if _event_loop and _active_bot_client and _active_bot_client.is_running():
+            print("Sending shutdown signal to bot...")
+            future = asyncio.run_coroutine_threadsafe(_active_bot_client.close(), _event_loop)
+            try: future.result(timeout=10)
+            except Exception as e: print(f"Error or timeout during bot client close: {e}")
+        _active_bot_client = None
+        _is_bot_ready_event.clear()
+        if _event_loop and not _event_loop.is_closed():
+            print("Stopping async event loop...")
+            _event_loop.call_soon_threadsafe(_event_loop.stop)
+        if _event_loop_thread and _event_loop_thread.is_alive():
+            print("Waiting for event loop thread to finish...")
+            _event_loop_thread.join(timeout=10)
+            if _event_loop_thread.is_alive(): print("Warning: Event loop thread did not stop cleanly.")
+        _event_loop = None
+        _event_loop_thread = None
+        print("Bot stopped.")
+
+def is_bot_ready() -> bool:
+    return _is_bot_ready_event.is_set() and _active_bot_client is not None and _active_bot_client.is_ready()
+
+def on_command(command_name: str):
+    def decorator(func: Callable[[discord.Message], None]):
+        clean_name = command_name.lower().strip()
+        if not clean_name: raise ValueError("Command name cannot be empty.")
+        _command_handlers[clean_name] = func
+        print(f"Registered command handler for: '{_command_prefix}{clean_name}' -> {func.__name__}")
+        return func
+    return decorator
+
+
+def send_message(message_content: Optional[str] = None, channel_id: Optional[int] = None, embed_dict: Optional[Dict] = None) -> Optional[discord.Message]:
+    if not is_bot_ready() or not _active_bot_client:
+        print("Error: Bot is not ready. Cannot send message.")
+        return None
+    if not message_content and not embed_dict:
+        print("Error: Must provide message_content or embed_dict to send_message.")
+        return None
+
+    async def _send_async():
+        cid_to_use = channel_id or _default_channel_id
+        if cid_to_use is None and _default_guild_id:
+            guild = _active_bot_client.get_guild(_default_guild_id)
+            if guild: cid_to_use = guild.system_channel.id if guild.system_channel else (guild.text_channels[0].id if guild.text_channels else None)
+        if cid_to_use is None:
+            print("Error: No channel ID specified or found.")
+            return None
+
+        target_channel = _active_bot_client.get_channel(cid_to_use)
+        if not target_channel or not isinstance(target_channel, discord.TextChannel):
+            print(f"Error: Channel ID {cid_to_use} not found or is not a text channel.")
+            return None
+        
+        embed_to_send = None
+        if embed_dict:
+            try: embed_to_send = discord.Embed.from_dict(embed_dict)
+            except Exception as e: print(f"Error creating embed from dict: {e}")
+
+        try:
+            return await target_channel.send(content=message_content, embed=embed_to_send)
+        except discord.Forbidden: print(f"Error: Bot lacks permission in channel {target_channel.name}.")
+        except Exception as e: print(f"Error sending message: {e}")
+        return None
+    return _run_coroutine_threadsafe(_send_async())
+
+def reply_to_message(original_message_obj: discord.Message, reply_text: Optional[str] = None, embed_dict: Optional[Dict] = None) -> Optional[discord.Message]:
+    if not is_bot_ready() or not isinstance(original_message_obj, discord.Message):
+        print("Error: Bot not ready or invalid original message.")
+        return None
+    if not reply_text and not embed_dict:
+        print("Error: Must provide reply_text or embed_dict to reply_to_message.")
+        return None
+    
+    async def _reply_async():
+        embed_to_send = None
+        if embed_dict:
+            try: embed_to_send = discord.Embed.from_dict(embed_dict)
+            except Exception as e: print(f"Error creating embed from dict: {e}")
+        try:
+            return await original_message_obj.reply(content=reply_text, embed=embed_to_send)
+        except discord.Forbidden: print(f"Error: Bot lacks permission to reply in {original_message_obj.channel.name}.")
+        except Exception as e: print(f"Error replying to message: {e}")
+        return None
+    return _run_coroutine_threadsafe(_reply_async())
+
+def create_embed(title: Optional[str] = None, description: Optional[str] = None,
+                 color_hex: Optional[int] = None, author_name: Optional[str] = None,
+                 author_icon_url: Optional[str] = None, footer_text: Optional[str] = None,
+                 footer_icon_url: Optional[str] = None, image_url: Optional[str] = None,
+                 thumbnail_url: Optional[str] = None, fields: Optional[List[Dict[str, Union[str, bool]]]] = None) -> Dict:
+    """
+    Creates an embed dictionary compatible with discord.Embed.from_dict().
+    'fields' should be a list of dictionaries, each with 'name', 'value', and optional 'inline' (bool).
+    Example: create_embed(title="My Embed", fields=[{"name": "Field1", "value": "Val1", "inline": True}])
+    """
+    embed_data = {}
+    if title: embed_data['title'] = title
+    if description: embed_data['description'] = description
+    if color_hex is not None: embed_data['color'] = color_hex
+    if author_name: embed_data['author'] = {'name': author_name, 'icon_url': author_icon_url or discord.Embed.Empty}
+    if footer_text: embed_data['footer'] = {'text': footer_text, 'icon_url': footer_icon_url or discord.Embed.Empty}
+    if image_url: embed_data['image'] = {'url': image_url}
+    if thumbnail_url: embed_data['thumbnail'] = {'url': thumbnail_url}
+    if fields: embed_data['fields'] = fields
+    return embed_data
+
+
+def edit_message(message_obj_to_edit: discord.Message, new_content: Optional[str] = None, new_embed_dict: Optional[Dict] = None) -> bool:
+    """Edits a message previously sent by the bot."""
+    if not is_bot_ready() or not _active_bot_client or not isinstance(message_obj_to_edit, discord.Message):
+        print("Error: Bot not ready or invalid message object.")
+        return False
+    if message_obj_to_edit.author != _active_bot_client.user:
+        print("Error: Can only edit messages sent by the bot.")
+        return False
+    
+    async def _edit_async():
+        embed_to_send = None
+        if new_embed_dict:
+            try: embed_to_send = discord.Embed.from_dict(new_embed_dict)
+            except Exception as e: print(f"Error creating embed from dict for edit: {e}")
+        try:
+            await message_obj_to_edit.edit(content=new_content, embed=embed_to_send)
+            return True
+        except discord.Forbidden: print("Error: Bot lacks permission to edit this message.")
+        except Exception as e: print(f"Error editing message: {e}")
+        return False
+    return _run_coroutine_threadsafe(_edit_async()) or False
+
+def delete_message(message_obj_to_delete: discord.Message, delay_seconds: Optional[float] = None) -> bool:
+    """Deletes a message. Bot needs 'Manage Messages' if not its own message."""
+    if not is_bot_ready() or not isinstance(message_obj_to_delete, discord.Message):
+        print("Error: Bot not ready or invalid message object.")
+        return False
+
+    async def _delete_async():
+        if delay_seconds is not None: await asyncio.sleep(delay_seconds)
+        try:
+            await message_obj_to_delete.delete()
+            return True
+        except discord.Forbidden: print("Error: Bot lacks permission to delete this message.")
+        except discord.NotFound: print("Error: Message not found for deletion (already deleted?).")
+        except Exception as e: print(f"Error deleting message: {e}")
+        return False
+    return _run_coroutine_threadsafe(_delete_async()) or False
+
+
+async def _resolve_member(user_id_or_name: Union[int, str], guild_id: Optional[int] = None) -> Optional[discord.Member]:
+    """Internal helper to get a member object."""
+    if not _active_bot_client: return None
+    gid_to_use = guild_id or _default_guild_id
+    if gid_to_use is None:
+        print("Error: Guild ID required for member operations.")
+        return None
+    guild = _active_bot_client.get_guild(gid_to_use)
+    if not guild:
+        print(f"Error: Guild {gid_to_use} not found.")
+        return None
+    
+    member: Optional[discord.Member] = None
+    if isinstance(user_id_or_name, int): 
+        member = guild.get_member(user_id_or_name)
+        if not member: 
+            try: member = await guild.fetch_member(user_id_or_name)
+            except discord.NotFound: pass
+    elif isinstance(user_id_or_name, str): 
+        if user_id_or_name.startswith('<@') and user_id_or_name.endswith('>'):
+            try:
+                uid = int(user_id_or_name.strip('<@!>'))
+                member = guild.get_member(uid) or await guild.fetch_member(uid)
+            except (ValueError, discord.NotFound): pass
+        else: 
+            member = guild.get_member_named(user_id_or_name)
+    
+    if not member: print(f"Member '{user_id_or_name}' not found in guild '{guild.name}'.")
+    return member
+
+def kick_member(user_id_or_name: Union[int, str], reason: Optional[str] = None, server_id: Optional[int] = None) -> bool:
+    """Kicks a member. Bot needs Kick Members permission."""
+    if not is_bot_ready(): print("Error: Bot not ready."); return False
+    
+    async def _kick_async():
+        member_to_kick = await _resolve_member(user_id_or_name, server_id)
+        if not member_to_kick: return False
+        try:
+            await member_to_kick.kick(reason=reason)
+            print(f"Kicked {member_to_kick.display_name}. Reason: {reason or 'N/A'}")
+            return True
+        except discord.Forbidden: print(f"Error: No permission to kick {member_to_kick.display_name}.")
+        except Exception as e: print(f"Error kicking member: {e}")
+        return False
+    return _run_coroutine_threadsafe(_kick_async()) or False
+
+def ban_member(user_id_or_name: Union[int, str], reason: Optional[str] = None, delete_message_days: int = 0, server_id: Optional[int] = None) -> bool:
+    """Bans a user/member. Bot needs Ban Members permission. delete_message_days (0-7)."""
+    if not is_bot_ready() or not _active_bot_client: print("Error: Bot not ready."); return False
+    
+    async def _ban_async():
+        gid_to_use = server_id or _default_guild_id
+        if gid_to_use is None: print("Error: Guild ID required for ban."); return False
+        guild = _active_bot_client.get_guild(gid_to_use)
+        if not guild: print(f"Error: Guild {gid_to_use} not found."); return False
+
+       
+        user_to_ban: Optional[Union[discord.User, discord.Member]] = None
+        if isinstance(user_id_or_name, int):
+            user_to_ban = _active_bot_client.get_user(user_id_or_name) or await _active_bot_client.fetch_user(user_id_or_name)
+        else: 
+            user_to_ban = await _resolve_member(user_id_or_name, server_id) 
+            if not user_to_ban and user_id_or_name.startswith('<@') and user_id_or_name.endswith('>'): 
+                try:
+                    uid = int(user_id_or_name.strip('<@!>'))
+                    user_to_ban = _active_bot_client.get_user(uid) or await _active_bot_client.fetch_user(uid)
+                except (ValueError, discord.NotFound): pass
+            
+
+        if not user_to_ban: print(f"User/Member '{user_id_or_name}' not found."); return False
+        
+        try:
+            await guild.ban(user_to_ban, reason=reason, delete_message_days=delete_message_days)
+            print(f"Banned {user_to_ban.name}. Reason: {reason or 'N/A'}")
+            return True
+        except discord.Forbidden: print(f"Error: No permission to ban {user_to_ban.name}.")
+        except Exception as e: print(f"Error banning user: {e}")
+        return False
+    return _run_coroutine_threadsafe(_ban_async()) or False
+
+def get_message_author_name(message_obj: discord.Message) -> Optional[str]:
+    if isinstance(message_obj, discord.Message): return message_obj.author.display_name
+    return None
+
+def get_message_content(message_obj: discord.Message) -> Optional[str]:
+    if isinstance(message_obj, discord.Message): return message_obj.content
+    return None
+
+def get_user_info(user_id_or_name: Union[int, str], server_id: Optional[int] = None) -> Optional[Dict]:
+    """Gets info about a user/member: id, name, display_name, roles (if member)."""
+    if not is_bot_ready(): print("Error: Bot not ready."); return None
+
+    async def _get_info_async():
+        member = await _resolve_member(user_id_or_name, server_id)
+        if member:
+            return {
+                "id": member.id,
+                "name": member.name,
+                "discriminator": member.discriminator,
+                "display_name": member.display_name,
+                "is_bot": member.bot,
+                "roles": [role.name for role in member.roles if role.name != "@everyone"],
+                "joined_at": member.joined_at.isoformat() if member.joined_at else None
+            }
+        elif isinstance(user_id_or_name, int) and _active_bot_client: 
+            user = _active_bot_client.get_user(user_id_or_name) or await _active_bot_client.fetch_user(user_id_or_name)
+            if user:
+                return {
+                    "id": user.id,
+                    "name": user.name,
+                    "discriminator": user.discriminator,
+                    "display_name": user.display_name, 
+                    "is_bot": user.bot,
+                }
+        return None
+    return _run_coroutine_threadsafe(_get_info_async())
+
+def get_server_info(server_id: Optional[int] = None) -> Optional[Dict]:
+    """Gets info about a server: id, name, owner_id, member_count."""
+    if not is_bot_ready() or not _active_bot_client: print("Error: Bot not ready."); return None
+    gid_to_use = server_id or _default_guild_id
+    if gid_to_use is None: print("Error: Server ID required."); return None
+    
+    async def _get_server_info_async():
+        guild = _active_bot_client.get_guild(gid_to_use)
+        if not guild: print(f"Server {gid_to_use} not found."); return None
+        return {
+            "id": guild.id,
+            "name": guild.name,
+            "owner_id": guild.owner_id,
+            "member_count": guild.member_count,
+            "icon_url": str(guild.icon.url) if guild.icon else None,
+            "text_channel_count": len(guild.text_channels),
+            "voice_channel_count": len(guild.voice_channels)
+        }
+    return _run_coroutine_threadsafe(_get_server_info_async())
+
+
+def keep_alive():
+    """
+    A simple function to keep the main thread alive with a sleep loop.
+    Call this after `start_bot()` if needed.
+    """
+    if is_bot_ready():
+        print("Your bot is uppp!! (you prolly know this but CTRL + C stops it)")
+        try:
+            while True:
+                time.sleep(1)
+        except KeyboardInterrupt:
+            print("\nCtrl+C pressed. Stopping bot.")
+        finally:
+            stop_bot()
+    else:
+        print("Bot did not start correctly, cannot keep running.")
