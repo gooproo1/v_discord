@@ -281,14 +281,7 @@ if __name__ == "__main__":
     run_my_bot()
 ```
 
-## 6. Important Considerations
-
-*   **Error Handling:** While the module tries to print errors, complex error handling from the background threads back to your main synchronous code can be limited. Check the console for error messages.
-*   **Performance:** For very high-traffic bots, the overhead of bridging synchronous and asynchronous code via threads might become a factor. For most common use cases, it should be acceptable.
-*   **Rate Limits:** Discord imposes API rate limits. Sending too many messages or performing too many actions too quickly will result in temporary blocks. This module doesn't inherently manage complex rate limiting beyond what `discord.py` handles.
-*   **Background Threads:** The bot's core logic runs in separate threads. Be mindful of this if you are doing complex state management that needs to be thread-safe (though for simple command handlers, this is usually not an issue).
-*   **Simplicity vs. Power:** This module prioritizes ease of use. For highly advanced or customized bot behavior, directly using `discord.py` with `async/await` will offer more control and flexibility.
-
+## Made With Luv By Justharsiz 🤑
 This module provides a gentle entry point into Discord bot development. Happy botting!
 ```
 v_discord v1.1.105
