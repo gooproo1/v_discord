@@ -303,3 +303,5 @@ if __name__ == "__main__":
 
 This module provides a gentle entry point into Discord bot development. Happy botting!
 ```
+v_discord v1.1.105
+```
