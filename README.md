@@ -1,8 +1,8 @@
-# `v-discord` (Super Easy Edition) - Documentation
+# `v-discord`
 
-`v-discord` (Super Easy Edition) is a Python module designed to simplify Discord bot creation by providing a more synchronous-looking, "script-style" interface while managing the underlying asynchronous `discord.py` client in background threads. It aims to make common bot tasks feel as straightforward as using libraries like PyAutoGUI.
+`v-discord`  is a Python module designed to simplify Discord bot creation by providing a more synchronous-looking, "script-style" interface while managing the underlying asynchronous `discord.py` client in background threads. It aims to make common bot tasks feel as straightforward as using libraries like PyAutoGUI.
 
-**Goal:** Make bot development accessible by hiding much of the `asyncio` complexity for common use cases.
+**Made for:** bot development to be accessible by hiding much of the `asyncio` complexity for common use cases.
 
 ## Table of Contents
 
